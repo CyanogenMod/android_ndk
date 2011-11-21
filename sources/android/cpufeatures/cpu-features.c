@@ -255,6 +255,11 @@ android_cpuInit(void)
                     g_cpuFeatures |= ANDROID_CPU_ARM_FEATURE_ARMv7;
                 }
 
+                /* The LDREX / STREX instructions are available from ARMv6 */
+                if (archNumber >= 6) {
+                    g_cpuFeatures |= ANDROID_CPU_ARM_FEATURE_LDREX_STREX;
+                }
+
                 free(cpuArch);
             }
         }
