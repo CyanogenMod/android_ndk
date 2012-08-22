@@ -31,9 +31,9 @@
 PROGRAM_PARAMETERS="<ndk-dir>"
 PROGRAM_DESCRIPTION="Rebuild the prebuilt ccache binary for the Android NDK toolchain."
 
-CCACHE_VERSION=ccache-2.4-android-20070905
-CCACHE_PACKAGE=$CCACHE_VERSION.tar.gz
-DOWNLOAD_ROOT=http://android.git.kernel.org/pub
+CCACHE_VERSION=ccache-3.1.8
+CCACHE_PACKAGE=$CCACHE_VERSION.tar.bz2
+DOWNLOAD_ROOT=http://samba.org/ftp/ccache
 CCACHE_URL=$DOWNLOAD_ROOT/$CCACHE_PACKAGE
 
 OPTION_PACKAGE=no
@@ -96,16 +96,25 @@ if [ $? != 0 ] ; then
     exit 1
 fi
 
-cd $BUILD_OUT && tar xzf $BUILD_OUT/$CCACHE_PACKAGE
+cd $BUILD_OUT && tar xjf $BUILD_OUT/$CCACHE_PACKAGE
 if [ $? != 0 ] ; then
     dump "Could not unpack $CCACHE_PACKAGE in $BUILD_OUT"
     exit 1
 fi
 
+echo "Configuring ccache..."
+cd $BUILD_OUT/$CCACHE_VERSION && run ./configure \
+--disable-nls --disable-rpath --disable-i18n --disable-acl
+if [ $? != 0 ] ; then
+    dump "Unable to configure ccache in $BUILD_OUT"
+    exit 1
+fi
+
 echo "Building ccache from sources..."
-cd $BUILD_OUT/$CCACHE_VERSION && run make clean && run make unpack && run make build
+cd $BUILD_OUT/$CCACHE_VERSION && run make clean && run make ccache
 if [ $? != 0 ] ; then
     dump "Could not build ccache in $BUILD_OUT"
+    exit 1
 fi
 
 PREBUILT_DIR=$NDK_DIR/build/prebuilt/$HOST_TAG/ccache
