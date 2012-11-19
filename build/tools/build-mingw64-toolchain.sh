@@ -16,8 +16,19 @@
 #
 # Rebuild the mingw64 cross-toolchain from scratch
 #
+# Sample (recommended for compatibility reasons) command line:
+#
+# GOOGLE_PREBUILT=<some folder>
+# git clone https://android.googlesource.com/platform/prebuilt $GOOGLE_PREBUILT
+# export PATH=$GOOGLE_PREBUILT/linux-x86/toolchain/i686-linux-glibc2.7-4.4.3/bin:$PATH
+# build-mingw64-toolchain.sh --target-arch=i686                       \
+#                            --package-dir=i686-w64-mingw32-toolchain \
+#                            --binprefix=i686-linux
+#
 
 PROGNAME=$(basename $0)
+PROGDIR=$(dirname $0)
+PROGDIR=$(cd $PROGDIR && pwd)
 
 HELP=
 VERBOSE=1
@@ -58,7 +69,7 @@ var_append ()
 run ()
 {
     if [ "$VERBOSE" -gt 0 ]; then
-        echo "COMMAND: >>>> $@" > $LOG_FILE
+        echo "COMMAND: >>>> $@" >> $LOG_FILE
     fi
     if [ "$VERBOSE" -gt 1 ]; then
         echo "COMMAND: >>>> $@"
@@ -66,14 +77,14 @@ run ()
     if [ "$VERBOSE" -gt 1 ]; then
         "$@"
     else
-        &>$LOG_FILE "$@"
+       "$@" > /dev/null 2>&1
     fi
 }
 
 log ()
 {
     if [ "$LOG_FILE" ]; then
-        echo "$@" > $LOG_FILE
+        echo "$@" >> $LOG_FILE
     fi
     if [ "$VERBOSE" -gt 0 ]; then
         echo "$@"
@@ -126,7 +137,10 @@ MPFR_VERSION=3.1.0
 MPC_VERSION=0.8.2
 BINUTILS_VERSION=2.22
 GCC_VERSION=4.6.3
-MINGW_W64_VERSION=v2.0.2
+# Need at least revision 5166
+#  "stdio.h (asprintf, vasprintf): Disable definitions stubs"
+#  as otherwise gold can't be built.
+MINGW_W64_VERSION=svn@5166
 
 JOBS=$(( $NUM_CORES * 2 ))
 
@@ -148,7 +162,7 @@ for opt; do
         --verbose) VERBOSE=$(( $VERBOSE + 1 ));;
         --quiet) VERBOSE=$(( $VERBOSE - 1 ));;
         --binprefix=*) HOST_BINPREFIX=$optarg;;
-        -j*|--jobjs=*) JOBS=$optarg;;
+        -j*|--jobs=*) JOBS=$optarg;;
         --target-arch=*) TARGET_ARCH=$optarg;;
         --no-multilib) TARGET_MULTILIBS="";;
         --force-build) FORCE_BUILD=true;;
@@ -187,7 +201,7 @@ if [ "$HELP" ]; then
     echo "  -j<num>                      Same as --jobs=<num>."
     echo "  --binprefix=<prefix>         Specify bin prefix for host toolchain."
     echo "  --no-multilib                Disable multilib toolchain build."
-    echo "  --arch=<arch>                Select default target architecture [$TARGET_ARCH]."
+    echo "  --target-arch=<arch>         Select default target architecture [$TARGET_ARCH]."
     echo "  --force-all                  Redo everything from scratch."
     echo "  --force-build                Force a rebuild (keep sources)."
     echo "  --cleanup                    Remove all temp files after build."
@@ -349,7 +363,7 @@ if [ "$FORCE_BUILD" ]; then
 fi
 
 # Make temp install directory
-INSTALL_DIR=$TEMP_DIR/install-$HOST_TAG/x86_64-w64-mingw32
+INSTALL_DIR=$TEMP_DIR/install-$HOST_TAG/$TARGET_TAG
 BUILD_DIR=$TEMP_DIR/build-$HOST_TAG
 
 mkdir -p $INSTALL_DIR
@@ -368,7 +382,37 @@ download_package http://ftp.gnu.org/gnu/mpfr/mpfr-$MPFR_VERSION.tar.bz2
 download_package http://www.multiprecision.org/mpc/download/mpc-$MPC_VERSION.tar.gz
 download_package http://ftp.gnu.org/gnu/binutils/binutils-$BINUTILS_VERSION.tar.bz2
 download_package http://ftp.gnu.org/gnu/gcc/gcc-$GCC_VERSION/gcc-$GCC_VERSION.tar.bz2
-download_package http://downloads.sourceforge.net/project/mingw-w64/mingw-w64/mingw-w64-release/mingw-w64-$MINGW_W64_VERSION.tar.gz
+
+MINGW_W64_VERSION_NO_REV=$(echo $MINGW_W64_VERSION | awk 'BEGIN { FS="@" }; { print $1 }')
+if [ "$MINGW_W64_VERSION_NO_REV" = "svn" ];  then
+    MINGW_W64_REVISION=$(echo $MINGW_W64_VERSION | awk 'BEGIN { FS="@" }; { print $2 }')
+    if [ ! -z "$MINGW_W64_REVISION" ] ; then
+        MINGW_W64_REVISION2=-r$MINGW_W64_REVISION
+        MINGW_W64_REVISION=@${MINGW_W64_REVISION}
+    fi
+    MINGW_W64_SRC=$SRC_DIR/mingw-w64-svn$MINGW_W64_REVISION2
+    MINGW_W64_VERSION=svn
+else
+    MINGW_W64_SRC=$SRC_DIR/mingw-w64-$MINGW_W64_VERSION
+fi
+
+if [ ! -d $MINGW_W64_SRC ]; then
+    if [ "$MINGW_W64_VERSION" = "svn" ];  then
+        echo "Checking out https://mingw-w64.svn.sourceforge.net/svnroot/mingw-w64/trunk$MINGW_W64_REVISION $MINGW_W64_SRC"
+        run svn co https://mingw-w64.svn.sourceforge.net/svnroot/mingw-w64/trunk$MINGW_W64_REVISION $MINGW_W64_SRC
+    else
+        download_package http://downloads.sourceforge.net/project/mingw-w64/mingw-w64/mingw-w64-release/mingw-w64-$MINGW_W64_VERSION.tar.gz
+    fi
+fi
+
+PATCHES_DIR="$PROGDIR/toolchain-patches-host/mingw-w64"
+if [ -d "$PATCHES_DIR" ] ; then
+    PATCHES=$(find "$PATCHES_DIR" -name "*.patch" | sort)
+    echo "Patching mingw-w64-$MINGW_W64_VERSION"
+    for PATCH in $PATCHES; do
+        (cd $MINGW_W64_SRC && run patch -p0 < $PATCH)
+    done
+fi
 
 # Let's generate the licenses/ directory
 LICENSES_DIR=$INSTALL_DIR/licenses/
@@ -464,7 +508,7 @@ build_mingw_headers ()
             mkdir -p $BUILD_DIR/$PKGNAME &&
             cd $BUILD_DIR/$PKGNAME &&
             log "$PKGNAME: Configuring" &&
-            run $SRC_DIR/mingw-w64-$MINGW_W64_VERSION/mingw-w64-headers/configure --prefix=$INSTALL_DIR --host=$TARGET_TAG --build=$HOST_TAG
+            run $MINGW_W64_SRC/mingw-w64-headers/configure --prefix=$INSTALL_DIR --host=$TARGET_TAG --build=$HOST_TAG
             fail_panic "Can't configure mingw-64-headers"
 
             log "$PKGNAME: Installing" &&
@@ -521,7 +565,7 @@ build_mingw_crt ()
             cd $BUILD_DIR/$PKGNAME &&
             export PATH=$INSTALL_DIR/bin:$PATH
             log "$PKGNAME: Configuring" &&
-            run $SRC_DIR/mingw-w64-$MINGW_W64_VERSION/mingw-w64-crt/configure "$@"
+            run $MINGW_W64_SRC/mingw-w64-crt/configure "$@"
             fail_panic "Can't configure $PKGNAME !!"
 
             log "$PKGNAME: Building" &&

@@ -79,6 +79,9 @@ register_var_option "--out-dir=<path>" OPTION_OUT_DIR "Specify output package di
 DEVELOPMENT_ROOT=`dirname $ANDROID_NDK_ROOT`/development/ndk
 register_var_option "--development-root=<path>" DEVELOPMENT_ROOT "Specify platforms/samples directory"
 
+LLVM_VERSION_LIST=$DEFAULT_LLVM_VERSION_LIST
+register_var_option "--llvm=<versions>" LLVM_VERSION_LIST "List of LLVM release versions"
+
 PROGRAM_PARAMETERS=
 PROGRAM_DESCRIPTION=\
 "Package a new set of release packages for the Android NDK.
@@ -131,6 +134,9 @@ for ARCH in $ARCHS; do
         ABIS=$ABIS" $DEFAULT_ABIS"
     fi
 done
+
+# Convert comma-separated list to space-separated list
+LLVM_VERSION_LIST=$(commas_to_spaces $LLVM_VERSION_LIST)
 
 # If --arch is used to list x86 as a target architecture, Add x86-4.4.3 to
 # the list of default toolchains to package. That is, unless you also
@@ -194,8 +200,10 @@ if [ -n "$PREBUILT_DIR" ] ; then
                 exit 1
             fi
         done
-        if [ ! -f "$PREBUILT_DIR/$TC-gdbserver.tar.bz2" ] ; then
-            echo "ERROR: Missing prebuilt file $TC-gdbserver.tar.bz2 in: $PREBUILT_DIR"
+    done
+    for ARCH in $ARCHS; do
+        if [ ! -f "$PREBUILT_DIR/$ARCH-gdbserver.tar.bz2" ] ; then
+            echo "ERROR: Missing prebuilt file $ARCH-gdbserver.tar.bz2 in: $PREBUILT_DIR"
             exit 1
         fi
     done
@@ -331,15 +339,19 @@ fi
 # Unpack prebuilt C++ runtimes headers and libraries
 if [ -z "$PREBUILT_NDK" ]; then
     # Unpack gdbserver
-    for TC in $TOOLCHAINS; do
-        unpack_prebuilt $TC-gdbserver.tar.bz2 "$REFERENCE"
+    for ARCH in $ARCHS; do
+        unpack_prebuilt $ARCH-gdbserver.tar.bz2 "$REFERENCE"
     done
     # Unpack C++ runtimes
-    unpack_prebuilt gnu-libstdc++-headers.tar.bz2 "$REFERENCE"
+    for VERSION in $DEFAULT_GCC_VERSION_LIST; do
+        unpack_prebuilt gnu-libstdc++-headers-$VERSION.tar.bz2 "$REFERENCE"
+    done
     for ABI in $ABIS; do
         unpack_prebuilt gabixx-libs-$ABI.tar.bz2 "$REFERENCE"
         unpack_prebuilt stlport-libs-$ABI.tar.bz2 "$REFERENCE"
-        unpack_prebuilt gnu-libstdc++-libs-$ABI.tar.bz2 "$REFERENCE"
+        for VERSION in $DEFAULT_GCC_VERSION_LIST; do
+            unpack_prebuilt gnu-libstdc++-libs-$VERSION-$ABI.tar.bz2 "$REFERENCE"
+        done
     done
 fi
 
@@ -385,9 +397,11 @@ for SYSTEM in $SYSTEMS; do
             echo "WARNING: Could not find STLport source tree!"
         fi
 
-        copy_prebuilt "$GNUSTL_SUBDIR/include" "$GNUSTL_SUBDIR"
-        for STL_ABI in $PREBUILT_ABIS; do
-            copy_prebuilt "$GNUSTL_SUBDIR/libs/$STL_ABI" "$GNUSTL_SUBDIR/libs"
+        for VERSION in $DEFAULT_GCC_VERSION_LIST; do
+            copy_prebuilt "$GNUSTL_SUBDIR/$VERSION/include" "$GNUSTL_SUBDIR/$VERSION/"
+            for STL_ABI in $PREBUILT_ABIS; do
+                copy_prebuilt "$GNUSTL_SUBDIR/$VERSION/libs/$STL_ABI" "$GNUSTL_SUBDIR/$VERSION/libs"
+            done
         done
     else
         # Unpack gdbserver
@@ -395,6 +409,11 @@ for SYSTEM in $SYSTEMS; do
             unpack_prebuilt $TC-$SYSTEM.tar.bz2
             echo "Removing sysroot for $TC"
             rm -rf $DSTDIR/toolchains/$TC/prebuilt/$SYSTEM/sysroot
+        done
+
+        # Unpack llvm and clang
+        for LLVM_VERSION in $LLVM_VERSION_LIST; do
+            unpack_prebuilt llvm-$LLVM_VERSION-$SYSTEM.tar.bz2
         done
 
         # Unpack prebuilt ndk-stack and other host tools
@@ -419,6 +438,10 @@ for SYSTEM in $SYSTEMS; do
             ;;
     esac
     echo "Creating $ARCHIVE"
+    # make all file universally readable, and all executable (including directory)
+    # universally executable, punt intended
+    find $DSTDIR -exec chmod a+r {} \;
+    find $DSTDIR -executable -exec chmod a+x {} \;
     pack_archive "$OUT_DIR/$ARCHIVE" "$TMPDIR" "$RELEASE_PREFIX"
     fail_panic "Could not create archive: $OUT_DIR/$ARCHIVE"
 #    chmod a+r $TMPDIR/$ARCHIVE

@@ -112,6 +112,14 @@ dump ()
     echo "$@"
 }
 
+dump_n ()
+{
+    if [ -n "$TMPLOG" ] ; then
+        printf %s "$@" >> $TMPLOG
+    fi
+    printf %s "$@"
+}
+
 log ()
 {
     if [ "$VERBOSE" = "yes" ] ; then
@@ -119,6 +127,17 @@ log ()
     else
         if [ -n "$TMPLOG" ] ; then
             echo "$@" >> $TMPLOG
+        fi
+    fi
+}
+
+log_n ()
+{
+    if [ "$VERBOSE" = "yes" ] ; then
+        printf %s "$@"
+    else
+        if [ -n "$TMPLOG" ] ; then
+            printf %s "$@" >> $TMPLOG
         fi
     fi
 }
@@ -142,6 +161,28 @@ run ()
     else
         if [ -n "$TMPLOG" ] ; then
             echo "## COMMAND: $@" >> $TMPLOG
+            "$@" >>$TMPLOG 2>&1
+        else
+            "$@" > /dev/null 2>&1
+        fi
+    fi
+}
+
+run2 ()
+{
+    if [ "$VERBOSE2" = "yes" ] ; then
+        echo "## COMMAND: $@"
+        "$@" 2>&1
+    elif [ "$VERBOSE" = "yes" ]; then
+        echo "## COMMAND: $@"
+        if [ -n "$TMPLOG" ]; then
+            echo "## COMMAND: $@" >> $TMPLOG
+            "$@" >>$TMPLOG 2>&1
+        else
+            "$@" > /dev/null 2>&1
+        fi
+    else
+        if [ -n "$TMPLOG" ]; then
             "$@" >>$TMPLOG 2>&1
         else
             "$@" > /dev/null 2>&1

@@ -13,7 +13,7 @@
 # limitations under the License.
 #
 
-# this file is used to prepare the NDK to build with the arm-eabi-4.4.0
+# this file is used to prepare the NDK to build with the arm gcc-4.4.3
 # toolchain any number of source files
 #
 # its purpose is to define (or re-define) templates used to build
@@ -36,22 +36,13 @@ TARGET_LDFLAGS :=
 TARGET_C_INCLUDES := \
     $(SYSROOT)/usr/include
 
-# This is to avoid the dreaded warning compiler message:
-#   note: the mangling of 'va_list' has changed in GCC 4.4
-#
-# The fact that the mangling changed does not affect the NDK ABI
-# very fortunately (since none of the exposed APIs used va_list
-# in their exported C++ functions). Also, GCC 4.5 has already
-# removed the warning from the compiler.
-#
-TARGET_CFLAGS += -Wno-psabi
-
 ifeq ($(TARGET_ARCH_ABI),armeabi-v7a)
     TARGET_CFLAGS += -march=armv7-a \
                      -mfloat-abi=softfp \
                      -mfpu=vfp
 
-    TARGET_LDFLAGS += -Wl,--fix-cortex-a8
+    TARGET_LDFLAGS += -march=armv7-a \
+                     -Wl,--fix-cortex-a8
 else
     TARGET_CFLAGS += -march=armv5te \
                             -mtune=xscale \
@@ -109,34 +100,3 @@ $(call add-src-files-target-cflags,\
     $(TARGET_CFLAGS.neon)) \
 $(call set-src-files-text,$(__arm_sources),arm$(space)$(space)) \
 $(call set-src-files-text,$(__thumb_sources),thumb)
-
-#
-# We need to add -lsupc++ to the final link command to make exceptions
-# and RTTI work properly (when -fexceptions and -frtti are used).
-#
-# Normally, the toolchain should be configured to do that automatically,
-# this will be debugged later.
-#
-define cmd-build-shared-library
-$(PRIVATE_CXX) \
-    $(PRIVATE_LDSCRIPT_XSC) \
-    -Wl,-soname,$(notdir $@) \
-    -shared \
-    --sysroot=$(call host-path,$(PRIVATE_SYSROOT)) \
-    $(PRIVATE_LINKER_OBJECTS_AND_LIBRARIES) \
-    $(PRIVATE_LDFLAGS) \
-    $(PRIVATE_LDLIBS) \
-    -o $(call host-path,$@)
-endef
-
-define cmd-build-executable
-$(PRIVATE_CXX) \
-    $(PRIVATE_LDSCRIPT_X) \
-    -Wl,--gc-sections \
-    -Wl,-z,nocopyreloc \
-    --sysroot=$(call host-path,$(PRIVATE_SYSROOT)) \
-    $(PRIVATE_LINKER_OBJECTS_AND_LIBRARIES) \
-    $(PRIVATE_LDFLAGS) \
-    $(PRIVATE_LDLIBS) \
-    -o $(call host-path,$@)
-endef

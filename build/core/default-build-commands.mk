@@ -33,12 +33,25 @@ TARGET-get-linker-objects-and-libraries = \
     $(call host-path, $2 $(PRIVATE_LIBGCC) $4) \
 
 
-# These flags are used to enfore the NX (no execute) security feature in the
+# These flags are used to enforce the NX (no execute) security feature in the
 # generated machine code. This adds a special section to the generated shared
 # libraries that instruct the Linux kernel to disable code execution from
 # the stack and the heap.
 TARGET_NO_EXECUTE_CFLAGS  := -Wa,--noexecstack
 TARGET_NO_EXECUTE_LDFLAGS := -Wl,-z,noexecstack
+
+# These flags disable the above security feature
+TARGET_DISABLE_NO_EXECUTE_CFLAGS  := -Wa,--execstack
+TARGET_DISABLE_NO_EXECUTE_LDFLAGS := -Wl,-z,execstack
+
+# These flags are used to mark certain regions of the resulting
+# executable or shared library as being read-only after the dynamic
+# linker has run. This makes GOT overwrite security attacks harder to
+# exploit.
+TARGET_RELRO_LDFLAGS := -Wl,-z,relro -Wl,-z,now
+
+# These flags disable the above security feature
+TARGET_DISABLE_RELRO_LDFLAGS := -Wl,-z,norelro -Wl,-z,lazy
 
 # NOTE: Ensure that TARGET_LIBGCC is placed after all private objects
 #       and static libraries, but before any other library in the link
@@ -51,36 +64,28 @@ TARGET_NO_EXECUTE_LDFLAGS := -Wl,-z,noexecstack
 #
 define cmd-build-shared-library
 $(PRIVATE_CXX) \
-    -nostdlib -Wl,-soname,$(notdir $@) \
-    -Wl,-shared,-Bsymbolic \
-    $(call host-path,\
-        $(TARGET_CRTBEGIN_SO_O) \
+    -Wl,-soname,$(notdir $(LOCAL_BUILT_MODULE)) \
+    -shared \
+    --sysroot=$(call host-path,$(PRIVATE_SYSROOT)) \
     $(PRIVATE_LINKER_OBJECTS_AND_LIBRARIES) \
     $(PRIVATE_LDFLAGS) \
     $(PRIVATE_LDLIBS) \
-    $(call host-path,\
-        $(TARGET_CRTEND_SO_O)) \
-    -o $(call host-path,$@)
+    -o $(call host-path,$(LOCAL_BUILT_MODULE))
 endef
 
 define cmd-build-executable
 $(PRIVATE_CXX) \
-    -nostdlib -Bdynamic \
-    -Wl,-dynamic-linker,/system/bin/linker \
     -Wl,--gc-sections \
     -Wl,-z,nocopyreloc \
-    $(call host-path,\
-        $(TARGET_CRTBEGIN_DYNAMIC_O) \
+    --sysroot=$(call host-path,$(PRIVATE_SYSROOT)) \
     $(PRIVATE_LINKER_OBJECTS_AND_LIBRARIES) \
     $(PRIVATE_LDFLAGS) \
     $(PRIVATE_LDLIBS) \
-    $(call host-path,\
-        $(TARGET_CRTEND_O)) \
-    -o $(call host-path,$@)
+    -o $(call host-path,$(LOCAL_BUILT_MODULE))
 endef
 
 define cmd-build-static-library
-$(PRIVATE_AR) $(call host-path,$@) $(PRIVATE_AR_OBJECTS)
+$(PRIVATE_AR) $(call host-path,$(LOCAL_BUILT_MODULE)) $(PRIVATE_AR_OBJECTS)
 endef
 
 # The strip command is only used for shared libraries and executables.
@@ -110,7 +115,3 @@ TARGET_AR       = $(TOOLCHAIN_PREFIX)ar
 TARGET_ARFLAGS := crs
 
 TARGET_STRIP    = $(TOOLCHAIN_PREFIX)strip
-
-# Add linker scripts flags for executables and shared libraries
-TARGET_LDSCRIPT_X :=
-TARGET_LDSCRIPT_XSC :=

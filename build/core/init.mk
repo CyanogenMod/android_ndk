@@ -255,17 +255,40 @@ ifdef HOST_PREBUILT
         HOST_MAKE := $(wildcard $(HOST_PREBUILT)/make$(HOST_EXEEXT))
     endif
 else
-    $(call ndk_log,Host tols prebuilt directory not found, using system tools)
+    $(call ndk_log,Host tools prebuilt directory not found, using system tools)
 endif
 
 HOST_ECHO := $(strip $(HOST_ECHO))
 ifndef HOST_ECHO
-    HOST_ECHO := $(strip $(wildcard $(NDK_ROOT)/prebuilt/$(HOST_TAG)/bin/echo$(HOST_EXEEXT)))
+    # Special case, on Cygwin, always use the host echo, not our prebuilt one
+    # which adds \r\n at the end of lines.
+    ifneq ($(HOST_OS),cygwin)
+        HOST_ECHO := $(strip $(wildcard $(NDK_ROOT)/prebuilt/$(HOST_TAG)/bin/echo$(HOST_EXEEXT)))
+    endif
 endif
 ifndef HOST_ECHO
     HOST_ECHO := echo
 endif
 $(call ndk_log,Host 'echo' tool: $(HOST_ECHO))
+
+# Define HOST_ECHO_N to perform the equivalent of 'echo -n' on all platforms.
+ifeq ($(HOST_OS),windows)
+  # Our custom toolbox echo binary supports -n.
+  HOST_ECHO_N := $(HOST_ECHO) -n
+else
+  # On Posix, just use bare printf.
+  HOST_ECHO_N := printf %s
+endif
+$(call ndk_log,Host 'echo -n' tool: $(HOST_ECHO_N))
+
+HOST_CMP := $(strip $(HOST_CMP))
+ifndef HOST_CMP
+    HOST_CMP := $(strip $(wildcard $(NDK_ROOT)/prebuilt/$(HOST_TAG)/bin/cmp$(HOST_EXEEXT)))
+endif
+ifndef HOST_CMP
+    HOST_CMP := cmp
+endif
+$(call ndk_log,Host 'cmp' tool: $(HOST_CMP))
 
 #
 # Verify that the 'awk' tool has the features we need.
@@ -404,6 +427,23 @@ ifdef NDK_TOOLCHAIN
     ,)
     $(call ndk_log, Using specific toolchain $(NDK_TOOLCHAIN))
 endif
+
+# Allow the user to define NDK_TOOLCHAIN_VERSION to override the toolchain
+# version number. Unlike NDK_TOOLCHAIN, this only changes the suffix of
+# the toolchain path we're using.
+#
+# For example, if GCC 4.6 is the default, defining NDK_TOOLCHAIN_VERSION=4.4.3
+# will ensure that ndk-build uses the following toolchains, depending on
+# the target architecture:
+#
+#    arm -> arm-linux-androideabi-4.4.3
+#    x86 -> x86-android-linux-4.4.3
+#    mips -> mipsel-linux-android-4.4.3
+#
+# This is used in setup-toolchain.mk
+#
+NDK_TOOLCHAIN_VERSION := $(strip $(NDK_TOOLCHAIN_VERSION))
+
 
 $(call ndk_log, This NDK supports the following target architectures and ABIS:)
 $(foreach arch,$(NDK_ALL_ARCHS),\

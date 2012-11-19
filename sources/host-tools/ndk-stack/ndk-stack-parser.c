@@ -126,7 +126,6 @@ static const char* get_next_token(const char* str, char* token, size_t size);
 NdkCrashParser*
 CreateNdkCrashParser(FILE* out_handle, const char* sym_root)
 {
-  int ok;
   NdkCrashParser* parser;
 
   parser = (NdkCrashParser*)calloc(sizeof(*parser), 1);
@@ -232,14 +231,13 @@ ParseLine(NdkCrashParser* parser, const char* line)
 static int
 MatchRegex(const char* line, const regex_t* regex, regmatch_t* match)
 {
-  char rerr[4096];
-  regex_t rex;
   int err = regexec(regex, line, 1, match, 0x00400/*REG_TRACE*/);
 #if 0
-    if (err) {
-        regerror(err, regex, rerr, sizeof(rerr));
-        fprintf(stderr, "regexec(%s, %s) has failed: %s\n", line, regex, rerr);
-    }
+  char rerr[4096];
+  if (err) {
+    regerror(err, regex, rerr, sizeof(rerr));
+    fprintf(stderr, "regexec(%s, %s) has failed: %s\n", line, regex, rerr);
+  }
 #endif
 
   return err == 0;
@@ -264,7 +262,7 @@ get_next_token(const char* str, char* token, size_t size)
   const char* start = next_token(str);
   const char* end = next_separator(start);
   if (start != end) {
-    const size_t to_copy = min((end - start), (size - 1));
+    const size_t to_copy = min((size_t)(end - start), (size - 1));
     memcpy(token, start, to_copy);
     token[to_copy] = '\0';
     return start;
@@ -326,10 +324,7 @@ ParseFrame(NdkCrashParser* parser, const char* frame)
   }
 
   // Build path to the symbol file.
-  strncpy(sym_file, parser->sym_root, sizeof(sym_file));
-  strncat(sym_file, "/", sizeof(sym_file));
-  strncat(sym_file, module_name, sizeof(sym_file));
-  sym_file[sizeof(sym_file)-1] = '\0';
+  snprintf(sym_file, sizeof(sym_file), "%s/%s", parser->sym_root, module_name);
 
   // Init ELFF wrapper for the symbol file.
   elff_handle = elff_init(sym_file);

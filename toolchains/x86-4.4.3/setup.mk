@@ -13,7 +13,7 @@
 # limitations under the License.
 #
 
-# this file is used to prepare the NDK to build with the x86-4.4.3
+# this file is used to prepare the NDK to build with the x86 gcc-4.4.3
 # toolchain any number of source files
 #
 # its purpose is to define (or re-define) templates used to build
@@ -24,7 +24,7 @@
 #
 
 TOOLCHAIN_NAME   := x86-4.4.3
-TOOLCHAIN_PREFIX := $(TOOLCHAIN_PREBUILT_ROOT)/bin/i686-android-linux-
+TOOLCHAIN_PREFIX := $(TOOLCHAIN_PREBUILT_ROOT)/bin/i686-linux-android-
 
 TARGET_CFLAGS := \
     -ffunction-sections \
@@ -36,8 +36,7 @@ TARGET_C_INCLUDES := \
 # Add and LDFLAGS for the target here
 # TARGET_LDFLAGS :=
 
-# Fix this after ssp.c is fixed for x86
-# TARGET_CFLAGS += -fstack-protector
+TARGET_CFLAGS += -fstack-protector
 
 TARGET_x86_release_CFLAGS :=  -O2 \
                               -fomit-frame-pointer \
@@ -63,36 +62,3 @@ $(call set-src-files-text,$(LOCAL_SRC_FILES),x86$(space)$(space)) \
 # The ABI-specific sub-directory that the SDK tools recognize for
 # this toolchain's generated binaries
 TARGET_ABI_SUBDIR := x86
-
-
-#
-# We need to add -lsupc++ to the final link command to make exceptions
-# and RTTI work properly (when -fexceptions and -frtti are used).
-#
-# Normally, the toolchain should be configured to do that automatically,
-# this will be debugged later.
-#
-
-define cmd-build-shared-library
-$(PRIVATE_CXX) \
-    $(PRIVATE_LDSCRIPT_XSC) \
-    -Wl,-soname,$(notdir $@) \
-    -shared \
-    --sysroot=$(call host-path,$(PRIVATE_SYSROOT)) \
-    $(PRIVATE_LINKER_OBJECTS_AND_LIBRARIES) \
-    $(PRIVATE_LDFLAGS) \
-    $(PRIVATE_LDLIBS) \
-    -o $(call host-path,$@)
-endef
-
-define cmd-build-executable
-$(PRIVATE_CXX) \
-    $(PRIVATE_LDSCRIPT_X) \
-    -Wl,--gc-sections \
-    -Wl,-z,nocopyreloc \
-    --sysroot=$(call host-path,$(PRIVATE_SYSROOT)) \
-    $(PRIVATE_LINKER_OBJECTS_AND_LIBRARIES) \
-    $(PRIVATE_LDFLAGS) \
-    $(PRIVATE_LDLIBS) \
-    -o $(call host-path,$@)
-endef

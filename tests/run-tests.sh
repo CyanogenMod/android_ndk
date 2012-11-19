@@ -38,7 +38,7 @@ LONG_TESTS="prebuild-stlport test-stlport test-gnustl"
 # Parse options
 #
 VERBOSE=no
-ABI=armeabi
+ABI=default
 PLATFORM=""
 NDK_ROOT=
 JOBS=$BUILD_NUM_CPUS
@@ -359,15 +359,11 @@ fi
 ###  REBUILD ALL SAMPLES FIRST
 ###
 
-# Special case, if ABI is 'armeabi' or 'armeabi-v7a'
-# we want to build both armeabi and armeabi-v7a machine code
-# even if we will only run the armeabi test programs on the
-# device. This is done by not forcing the definition of APP_ABI
 NDK_BUILD_FLAGS="-B"
 case $ABI in
-    armeabi|armeabi-v7a)
+    default)  # Let the APP_ABI in jni/Application.mk decide what to build
         ;;
-    x86|mips)
+    armeabi|armeabi-v7a|x86|mips)
         NDK_BUILD_FLAGS="$NDK_BUILD_FLAGS APP_ABI=$ABI"
         ;;
     *)
@@ -395,16 +391,42 @@ run_ndk_build ()
     fi
 }
 
+get_build_var ()
+{
+    if [ -z "$GNUMAKE" ] ; then
+        GNUMAKE=make
+    fi
+    $GNUMAKE --no-print-dir -f $NDK/build/core/build-local.mk -C $DIR DUMP_$1 | tail -1
+}
+
 build_project ()
 {
     local NAME=`basename $1`
+    local CHECK_ABI=$2
     local DIR="$BUILD_DIR/$NAME"
     if [ -f "$1/BROKEN_BUILD" -a -z "$RUN_TESTS" ] ; then
-        echo "Skipping $1: (build)"
+        echo "Skipping `basename $1`: (build)"
         return 0
     fi
     rm -rf "$DIR" && cp -r "$1" "$DIR"
-    (cd "$DIR" && run_ndk_build $NDK_BUILD_FLAGS)
+    if [ "$ABI" != "default" -a "$CHECK_ABI" = "yes" ] ; then
+        # check APP_ABI
+        local APP_ABIS=`get_build_var APP_ABI`
+        APP_ABIS=$APP_ABIS" "
+        if [ "$APP_ABIS" != "${APP_ABIS%%all*}" ] ; then
+        # replace the first "all" with all available ABIs
+          ALL_ABIS=`get_build_var NDK_ALL_ABIS`
+          APP_ABIS_FRONT="${APP_ABIS%%all*}"
+          APP_ABIS_BACK="${APP_ABIS#*all}"
+          APP_ABIS="${APP_ABIS_FRONT}${ALL_ABIS}${APP_ABIS_BACK}"
+        fi
+        if [ "$APP_ABIS" = "${APP_ABIS%$ABI *}" ] ; then
+            echo "Skipping `basename $1`: incompatible ABI, needs $APP_ABIS"
+            return 0
+        fi
+    fi
+    # build it
+    (run cd "$DIR" && run_ndk_build $NDK_BUILD_FLAGS)
     RET=$?
     if [ -f "$1/BUILD_SHOULD_FAIL" ]; then
         if [ $RET = 0 ]; then
@@ -458,7 +480,7 @@ if is_testable samples; then
     build_sample ()
     {
         echo "Building NDK sample: `basename $1`"
-        build_project $1
+        build_project $1 "no"
     }
 
     for DIR in $SAMPLES_DIRS; do
@@ -486,7 +508,7 @@ if is_testable build; then
                 exit 1
             fi
         else
-            build_project $1
+            build_project $1 "yes"
         fi
     }
 
@@ -502,6 +524,7 @@ fi
 ###  XXX: TODO: RUN THEM ON A DEVICE/EMULATOR WITH ADB
 ###
 
+CPU_ABIS=
 if is_testable device; then
     build_device_test ()
     {
@@ -512,12 +535,12 @@ if is_testable device; then
             return 0
         fi
         echo "Building NDK device test: `basename $1` in $1"
-        build_project $1
+        build_project $1 "yes"
     }
 
     run_device_test ()
     {
-        local SRCDIR="$BUILD_DIR/`basename $1`/libs/$ABI"
+        local SRCDIR
         local DSTDIR="$2/ndk-tests"
         local SRCFILE
         local DSTFILE
@@ -530,8 +553,14 @@ if is_testable device; then
 		return 0
 	    fi
         fi
+        for CPU_ABI in $CPU_ABIS; do
+            SRCDIR="$BUILD_DIR/`basename $1`/libs/$CPU_ABI"
+            if [ -d "$SRCDIR" ]; then
+                break;
+            fi
+        done
         if [ ! -d "$SRCDIR" ]; then
-            dump "Skipping NDK device test run (no $ABI binaries): `basename $1`"
+            dump "Skipping NDK device test run (no $CPU_ABIS binaries): `basename $1`"
             return 0
         fi
         # First, copy all files to the device, except for gdbserver
@@ -542,8 +571,12 @@ if is_testable device; then
             if [ "$DSTFILE" = "gdbserver" -o "$DSTFILE" = "gdb.setup" ] ; then
                 continue
             fi
+            SRCFILE="$SRCDIR/$SRCFILE"
+            if [ $HOST_OS = cygwin ]; then
+                SRCFILE=`cygpath -m $SRCFILE`
+            fi
             DSTFILE="$DSTDIR/$DSTFILE"
-            run $ADB_CMD push "$SRCDIR/$SRCFILE" "$DSTFILE" &&
+            run $ADB_CMD push "$SRCFILE" "$DSTFILE" &&
             run $ADB_CMD shell chmod 0755 $DSTFILE
             if [ $? != 0 ] ; then
                 dump "ERROR: Could not install $SRCFILE to device!"
@@ -580,7 +613,7 @@ if is_testable device; then
         dump "WARNING: No 'adb' in your path!"
         SKIP_TESTS=yes
     else
-        ADB_DEVICES=`$ADB_CMD devices`
+        ADB_DEVICES=`$ADB_CMD devices | sed '/^$/d'`
         log2 "ADB devices: $ADB_DEVICES"
         ADB_DEVCOUNT=`echo "$ADB_DEVICES" | wc -l`
         ADB_DEVCOUNT=`expr $ADB_DEVCOUNT - 1`
@@ -596,6 +629,15 @@ if is_testable device; then
         if [ $? = 0 ] ; then
             dump "WARNING: Device is offline, can't run device tests!"
             SKIP_TESTS=yes
+        fi
+        if [ "$ABI" != "default" ] ; then
+            CPU_ABIS=$ABI
+        else
+            # get device CPU_ABI and CPU_ABI2, each may contain list of abi, comma-delimited.
+            CPU_ABI1=`$ADB_CMD shell getprop ro.product.cpu.abi | tr -dc '[:print:]'`
+            CPU_ABI2=`$ADB_CMD shell getprop ro.product.cpu.abi2 | tr -dc '[:print:]'`
+            CPU_ABIS="$CPU_ABI1,$CPU_ABI2"
+            CPU_ABIS=$(echo $CPU_ABIS | tr ',' ' ')
         fi
     fi
 

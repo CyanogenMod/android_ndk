@@ -30,6 +30,9 @@ force_32bit_binaries
 TOOLCHAIN_NAME=
 register_var_option "--toolchain=<name>" TOOLCHAIN_NAME "Specify toolchain name"
 
+LLVM_VERSION=
+register_var_option "--llvm-ver=<vers>" LLVM_VERSION "List of LLVM release versions"
+
 ARCH=
 register_option "--arch=<name>" do_arch "Specify target architecture" "arm"
 do_arch () { ARCH=$1; }
@@ -136,7 +139,7 @@ if [ ! -d "$SRC_SYSROOT" ] ; then
     exit 1
 fi
 
-# Check that we have any prebuilts here
+# Check that we have any prebuilts GCC toolchain here
 if [ ! -d "$TOOLCHAIN_PATH/prebuilt" ] ; then
     echo "Toolchain is missing prebuilt files: $TOOLCHAIN_NAME"
     echo "You must point to a valid NDK release package!"
@@ -150,13 +153,47 @@ if [ ! -d "$TOOLCHAIN_PATH/prebuilt/$SYSTEM" ] ; then
 fi
 
 TOOLCHAIN_PATH="$TOOLCHAIN_PATH/prebuilt/$SYSTEM"
+TOOLCHAIN_GCC=$TOOLCHAIN_PATH/bin/$ABI_CONFIGURE_TARGET-gcc
+
+if [ ! -f "$TOOLCHAIN_GCC" ] ; then
+    echo "Toolchain $TOOLCHAIN_GCC is missing!"
+    exit 1
+fi
+
+if [ -n "$LLVM_VERSION" ]; then
+    LLVM_TOOLCHAIN_PATH="$NDK_DIR/toolchains/llvm-$LLVM_VERSION"
+    # Check that we have any prebuilts LLVM toolchain here
+    if [ ! -d "$LLVM_TOOLCHAIN_PATH/prebuilt" ] ; then
+        echo "LLVM Toolchain is missing prebuilt files"
+        echo "You must point to a valid NDK release package!"
+        exit 1
+    fi
+
+    if [ ! -d "$LLVM_TOOLCHAIN_PATH/prebuilt/$SYSTEM" ] ; then
+        echo "Host system '$SYSTEM' is not supported by the source NDK!"
+        echo "Try --system=<name> with one of: " `(cd $LLVM_TOOLCHAIN_PATH/prebuilt && ls)`
+        exit 1
+    fi
+    LLVM_TOOLCHAIN_PATH="$LLVM_TOOLCHAIN_PATH/prebuilt/$SYSTEM"
+fi
+
+# Get GCC_BASE_VERSION.  Note that GCC_BASE_VERSION may be slightly different from GCC_VERSION.
+# eg. In gcc4.6 GCC_BASE_VERSION is "4.6.x-google"
+LIBGCC_PATH=`$TOOLCHAIN_GCC -print-libgcc-file-name`
+LIBGCC_BASE_PATH=${LIBGCC_PATH%/libgcc.a}  # base path of libgcc.a
+GCC_BASE_VERSION=${LIBGCC_BASE_PATH##*/}   # stuff after the last /
 
 # Create temporary directory
 TMPDIR=$NDK_TMPDIR/standalone/$TOOLCHAIN_NAME
 
 dump "Copying prebuilt binaries..."
-# Now copy the toolchain prebuilt binaries
+# Now copy the GCC toolchain prebuilt binaries
 run copy_directory "$TOOLCHAIN_PATH" "$TMPDIR"
+
+if [ -n "$LLVM_VERSION" ]; then
+  # Copy the clang/llvm toolchain prebuilt binaries
+  run copy_directory "$LLVM_TOOLCHAIN_PATH" "$TMPDIR"
+fi
 
 dump "Copying sysroot headers and libraries..."
 # Copy the sysroot under $TMPDIR/sysroot. The toolchain was built to
@@ -165,11 +202,11 @@ run copy_directory_nolinks "$SRC_SYSROOT" "$TMPDIR/sysroot"
 
 dump "Copying libstdc++ headers and libraries..."
 
-GNUSTL_DIR=$NDK_DIR/$GNUSTL_SUBDIR
+GNUSTL_DIR=$NDK_DIR/$GNUSTL_SUBDIR/$GCC_VERSION
 GNUSTL_LIBS=$GNUSTL_DIR/libs
 
 ABI_STL="$TMPDIR/$ABI_CONFIGURE_TARGET"
-ABI_STL_INCLUDE="$ABI_STL/include/c++/$GCC_VERSION"
+ABI_STL_INCLUDE="$TMPDIR/include/c++/$GCC_BASE_VERSION"
 
 copy_directory "$GNUSTL_DIR/include" "$ABI_STL_INCLUDE"
 ABI_STL_INCLUDE_TARGET="$ABI_STL_INCLUDE/$ABI_CONFIGURE_TARGET"
@@ -180,29 +217,34 @@ case "$ARCH" in
         copy_directory "$GNUSTL_LIBS/armeabi/include/bits" "$ABI_STL_INCLUDE_TARGET/bits"
         copy_file_list "$GNUSTL_LIBS/armeabi" "$ABI_STL/lib" "libgnustl_shared.so"
         copy_file_list "$GNUSTL_LIBS/armeabi" "$ABI_STL/lib" "libsupc++.a"
-        cp "$GNUSTL_LIBS/armeabi/libgnustl_static.a" "$ABI_STL/lib/libstdc++.a"
+        cp -p "$GNUSTL_LIBS/armeabi/libgnustl_static.a" "$ABI_STL/lib/libstdc++.a"
 
         copy_directory "$GNUSTL_LIBS/armeabi/include/bits" "$ABI_STL_INCLUDE_TARGET/thumb/bits"
         copy_file_list "$GNUSTL_LIBS/armeabi" "$ABI_STL/lib/thumb" "libgnustl_shared.so"
         copy_file_list "$GNUSTL_LIBS/armeabi" "$ABI_STL/lib/thumb" "libsupc++.a"
-        cp "$GNUSTL_LIBS/armeabi/libgnustl_static.a" "$ABI_STL/lib/thumb/libstdc++.a"
+        cp -p "$GNUSTL_LIBS/armeabi/libgnustl_static.a" "$ABI_STL/lib/thumb/libstdc++.a"
 
         copy_directory "$GNUSTL_LIBS/armeabi-v7a/include/bits" "$ABI_STL_INCLUDE_TARGET/armv7-a/bits"
         copy_file_list "$GNUSTL_LIBS/armeabi-v7a" "$ABI_STL/lib/armv7-a" "libgnustl_shared.so"
         copy_file_list "$GNUSTL_LIBS/armeabi-v7a" "$ABI_STL/lib/armv7-a" "libsupc++.a"
-        cp "$GNUSTL_LIBS/armeabi-v7a/libgnustl_static.a" "$ABI_STL/lib/armv7-a/libstdc++.a"
+        cp -p "$GNUSTL_LIBS/armeabi-v7a/libgnustl_static.a" "$ABI_STL/lib/armv7-a/libstdc++.a"
+
+        copy_directory "$GNUSTL_LIBS/armeabi-v7a/include/bits" "$ABI_STL_INCLUDE_TARGET/armv7-a/thumb/bits"
+        copy_file_list "$GNUSTL_LIBS/armeabi-v7a" "$ABI_STL/lib/armv7-a/thumb/" "libgnustl_shared.so"
+        copy_file_list "$GNUSTL_LIBS/armeabi-v7a" "$ABI_STL/lib/armv7-a/thumb/" "libsupc++.a"
+        cp -p "$GNUSTL_LIBS/armeabi-v7a/libgnustl_static.a" "$ABI_STL/lib/armv7-a//thumb/libstdc++.a"
         ;;
     x86)
         copy_directory "$GNUSTL_LIBS/x86/include/bits" "$ABI_STL_INCLUDE_TARGET/bits"
         copy_file_list "$GNUSTL_LIBS/x86" "$ABI_STL/lib" "libgnustl_shared.so"
         copy_file_list "$GNUSTL_LIBS/x86" "$ABI_STL/lib" "libsupc++.a"
-        cp "$GNUSTL_LIBS/x86/libgnustl_static.a" "$ABI_STL/lib/libstdc++.a"
+        cp -p "$GNUSTL_LIBS/x86/libgnustl_static.a" "$ABI_STL/lib/libstdc++.a"
         ;;
     mips)
         copy_directory "$GNUSTL_LIBS/mips/include/bits" "$ABI_STL_INCLUDE_TARGET/bits"
         copy_file_list "$GNUSTL_LIBS/mips" "$ABI_STL/lib" "libgnustl_shared.so"
         copy_file_list "$GNUSTL_LIBS/mips" "$ABI_STL/lib" "libsupc++.a"
-        cp "$GNUSTL_LIBS/mips/libgnustl_static.a" "$ABI_STL/lib/libstdc++.a"
+        cp -p "$GNUSTL_LIBS/mips/libgnustl_static.a" "$ABI_STL/lib/libstdc++.a"
         ;;
     *)
         dump "ERROR: Unsupported NDK architecture!"

@@ -162,6 +162,11 @@ APP_ABI
     For the list of all supported ABIs and details about their usage and
     limitations, please read docs/CPU-ARCH-ABIS.html
 
+APP_PLATFORM
+    Name the target Android platform.  For example, 'android-3' correspond
+    to Android 1.5 system images. For a complete list of platform names and
+    corresponding Android system images, read docs/STABLE-APIS.html.
+
 APP_STL
     By default, the NDK build system provides C++ headers for the minimal
     C++ runtime library (/system/lib/libstdc++.so) provided by the Android
@@ -209,6 +214,10 @@ APP_GNUSTL_FORCE_CPP_FEATURES
 APP_SHORT_COMMANDS
     The equivalent of LOCAL_SHORT_COMMANDS for your whole project. See the
     documentation for this variable in docs/ANDROID-MK.html.
+
+NDK_TOOLCHAIN_VERSION
+    Define this variable to either 4.4.3 or 4.6 to select version of GCC compiler.
+    4.6 is the default
 
 A trivial Application.mk file would be:
 

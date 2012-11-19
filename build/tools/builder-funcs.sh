@@ -251,6 +251,11 @@ builder_sources ()
                 exit 1
                 ;;
         esac
+
+        # Ensure we have unwind tables in the generated machine code
+        # This is useful to get good stack traces
+        cflags=$cflags" -funwind-tables"
+
         obj=$_BUILD_DIR/$obj.o
         if [ "$_BUILD_MK" ]; then
             echo "$obj: $srcfull" >> $_BUILD_MK
@@ -456,9 +461,6 @@ builder_begin_android ()
         armeabi-v7a)
             builder_cflags "-mthumb -march=armv7-a -mfloat-abi=softfp -mfpu=vfpv3-d16"
             builder_ldflags "-Wl,--fix-cortex-a8"
-            ;;
-        mips)
-            builder_ldflags "-Wl,-T,$NDK_DIR/toolchains/mipsel-linux-android-4.4.3/mipself.xsc"
             ;;
     esac
 }

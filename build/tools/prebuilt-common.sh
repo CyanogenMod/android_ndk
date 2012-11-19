@@ -127,6 +127,14 @@ list_files_under ()
     fi
 }
 
+# Assign a value to a variable
+# $1: Variable name
+# $2: Value
+var_assign ()
+{
+    eval $1=\"$2\"
+}
+
 #====================================================
 #
 #  OPTION PROCESSING
@@ -559,12 +567,60 @@ handle_mingw ()
             # NOTE: The canadian-cross build of Binutils 2.19 will fail if you
             #        use i586-pc-mingw32msvc here. Binutils 2.21 will work ok
             #        with both names.
-            ABI_CONFIGURE_HOST=i586-mingw32msvc
+            #       Use i586-pc-mingw32msvc here because wrappers are generated
+            #        using this name
+            ABI_CONFIGURE_HOST=i586-pc-mingw32msvc
         fi
         HOST_OS=windows
         HOST_TAG=windows
         HOST_EXE=.exe
     fi
+}
+
+# Find mingw toolchain
+#
+# Set MINGW_GCC to the found mingw toolchain
+#
+find_mingw_toolchain ()
+{
+    # IMPORTANT NOTE: binutils 2.21 requires a cross toolchain named
+    # i585-pc-mingw32msvc-gcc, or it will fail its configure step late
+    # in the toolchain build. Note that binutils 2.19 can build properly
+    # with i585-mingw32mvsc-gcc, which is the name used by the 'mingw32'
+    # toolchain install on Debian/Ubuntu.
+    #
+    # To solve this dilemma, we create a wrapper toolchain named
+    # i586-pc-mingw32msvc-gcc that really calls i586-mingw32msvc-gcc,
+    # this works with all versions of binutils.
+    #
+    # We apply the same logic to the 64-bit Windows cross-toolchain
+    #
+    # Fedora note: On Fedora it's x86_64-w64-mingw32- or i686-w64-mingw32-
+    # On older Fedora it's 32-bit only and called i686-pc-mingw32-
+    # so we just add more prefixes to the list to check.
+    if [ "$HOST_ARCH" = "x86_64" -a "$TRY64" = "yes" ]; then
+        BINPREFIX=x86_64-pc-mingw32msvc-
+        BINPREFIXLST="x86_64-pc-mingw32msvc- amd64-mingw32msvc-
+          x86_64-w64-mingw32-"
+        DEBIAN_NAME=mingw64
+    else
+        # we are trying 32 bit anyway, so forcing it to avoid build issues
+        force_32bit_binaries
+        BINPREFIX=i586-pc-mingw32msvc-
+        BINPREFIXLST="i586-pc-mingw32msvc- i686-pc-mingw32- i686-w64-mingw32-
+          i586-mingw32msvc-"
+        DEBIAN_NAME=mingw32
+    fi
+
+    # Scan $BINPREFIXLST list to find installed mingw toolchain. It will be
+    # wrapped later with $BINPREFIX.
+    for i in $BINPREFIXLST; do
+        find_program MINGW_GCC ${i}gcc
+        if [ -n "$MINGW_GCC" ]; then
+            dump "Found mingw toolchain: $MINGW_GCC"
+            break
+        fi
+    done
 }
 
 # If --mingw option is used, check that there is a working
@@ -579,59 +635,39 @@ prepare_mingw_toolchain ()
     if [ "$MINGW" != "yes" ]; then
         return
     fi
-
-    # IMPORTANT NOTE: binutils 2.21 requires a cross toolchain named
-    # i585-pc-mingw32msvc-gcc, or it will fail its configure step late
-    # in the toolchain build. Note that binutils 2.19 can build properly
-    # with i585-mingw32mvsc-gcc, which is the name used by the 'mingw32'
-    # toolchain install on Debian/Ubuntu.
-    #
-    # To solve this dilemma, we create a wrapper toolchain named
-    # i586-pc-mingw32msvc-gcc that really calls i586-mingw32msvc-gcc,
-    # this works with all versions of binutils.
-    #
-    # We apply the same logic to the 64-bit Windows cross-toolchain
-    #
-    if [ "$HOST_ARCH" = "x86_64" -a "$TRY64" = "yes" ]; then
-        BINPREFIX1=x86_64-pc-mingw32msvc-
-        BINPREFIX2=amd64-mingw32msvc-
-        DEBIAN_NAME=mingw64
-    else
-        BINPREFIX1=i586-pc-mingw32msvc-
-        BINPREFIX2=i586-mingw32msvc-
-        DEBIAN_NAME=mingw32
+    find_mingw_toolchain
+    if [ -z "$MINGW_GCC" ]; then
+        echo "ERROR: Could not find in your PATH any of:"
+        for i in $BINPREFIXLST; do echo "   ${i}gcc"; done
+        echo "Please install the corresponding cross-toolchain and re-run this script"
+        echo "TIP: On Debian or Ubuntu, try: sudo apt-get install $DEBIAN_NAME"
+        exit 1
     fi
+    # Create a wrapper toolchain, and prepend its dir to our PATH
+    MINGW_WRAP_DIR="$1"/$DEBIAN_NAME-wrapper
+    rm -rf "$MINGW_WRAP_DIR"
 
-    # First, check that there is ${BINPREFIX1}gcc is installed and
-    # in our PATH. This is very unlikely, but use it if it's there.
-    find_program MINGW_GCC ${BINPREFIX1}gcc
-    if [ -n "$MINGW_GCC" ]; then
-        dump "Found mingw toolchain: $MINGW_GCC"
-    else
-        # We didn't find it, that's ok, try to find ${BINPREFIX2}gcc
-        # then, if it is there, create a wrapper toolchain for it
-        find_program MINGW_GCC ${BINPREFIX2}gcc
-        if [ -z "$MINGW_GCC" ]; then
-            echo "ERROR: Could not find ${BINPREFIX1}gcc or ${BINPREFIX2}gcc in your PATH"
-            echo "Please install the corresponding cross-toolchain and re-run this script"
-            echo "TIP: On Debian or Ubuntu, try: sudo apt-get install $DEBIAN_NAME"
-            exit 1
-        fi
-        # Create a wrapper toolchain, and prepend its dir to our PATH
-        MINGW_WRAP_DIR="$1"/$DEBIAN_NAME-wrapper
-        rm -rf "$MINGW_WRAP_DIR"
-
-        DST_PREFIX=${MINGW_GCC%gcc}
-        if [ "$NDK_CCACHE" ]; then
-            DST_PREFIX="$NDK_CCACHE $DST_PREFIX"
-        fi
-
-        $NDK_BUILDTOOLS_PATH/gen-toolchain-wrapper.sh --src-prefix=$BINPREFIX1 --dst-prefix="$DST_PREFIX" "$MINGW_WRAP_DIR"
-        fail_panic "Could not create mingw wrapper toolchain in $MINGW_WRAP_DIR"
-
-        export PATH=$MINGW_WRAP_DIR:$PATH
-        dump "Using mingw wrapper: $MINGW_WRAP_DIR/${BINPREFIX1}gcc"
+    DST_PREFIX=${MINGW_GCC%gcc}
+    if [ "$NDK_CCACHE" ]; then
+        DST_PREFIX="$NDK_CCACHE $DST_PREFIX"
     fi
+    $NDK_BUILDTOOLS_PATH/gen-toolchain-wrapper.sh --src-prefix=$BINPREFIX --dst-prefix="$DST_PREFIX" "$MINGW_WRAP_DIR"
+    # generate wrappers for BUILD toolchain
+    # this is required for mingw build to avoid tools canadian cross configuration issues
+    LEGACY_TOOLCHAIN_DIR="$ANDROID_NDK_ROOT/../prebuilts/gcc/linux-x86/host/x86_64-linux-glibc2.7-4.6"
+    $NDK_BUILDTOOLS_PATH/gen-toolchain-wrapper.sh --src-prefix=x86_64-linux-gnu- \
+            --dst-prefix="$LEGACY_TOOLCHAIN_DIR/bin/x86_64-linux-" "$MINGW_WRAP_DIR"
+    $NDK_BUILDTOOLS_PATH/gen-toolchain-wrapper.sh --src-prefix=x86_64-pc-linux-gnu- \
+            --dst-prefix="$LEGACY_TOOLCHAIN_DIR/bin/x86_64-linux-" "$MINGW_WRAP_DIR"
+    LEGACY_TOOLCHAIN_DIR="$ANDROID_NDK_ROOT/../prebuilts/gcc/linux-x86/host/i686-linux-glibc2.7-4.6"
+    $NDK_BUILDTOOLS_PATH/gen-toolchain-wrapper.sh --src-prefix=i386-linux-gnu- \
+            --dst-prefix="$LEGACY_TOOLCHAIN_DIR/bin/i686-linux-" "$MINGW_WRAP_DIR"
+    $NDK_BUILDTOOLS_PATH/gen-toolchain-wrapper.sh --src-prefix=i386-pc-linux-gnu- \
+            --dst-prefix="$LEGACY_TOOLCHAIN_DIR/bin/i686-linux-" "$MINGW_WRAP_DIR"
+    fail_panic "Could not create mingw wrapper toolchain in $MINGW_WRAP_DIR"
+
+    export PATH=$MINGW_WRAP_DIR:$PATH
+    dump "Using mingw wrapper: $MINGW_WRAP_DIR/${BINPREFIX}gcc"
 }
 
 handle_host ()
@@ -735,7 +771,7 @@ prepare_common_build ()
     /* this test should fail if the compiler generates 64-bit machine code */
     int test_array[1-2*(sizeof(void*) != 4)];
 EOF
-    log -n "Checking whether the compiler generates 32-bit binaries..."
+    log_n "Checking whether the compiler generates 32-bit binaries..."
     HOST_BITS=32
     log2 $CC $HOST_CFLAGS -c -o $TMPO $TMPC
     $NDK_CCACHE $CC $HOST_CFLAGS -c -o $TMPO $TMPC >$TMPL 2>&1
@@ -856,7 +892,7 @@ parse_toolchain_name ()
         ARCH="x86"
         ABI=$ARCH
         ABI_INSTALL_NAME="x86"
-        ABI_CONFIGURE_TARGET="i686-android-linux"
+        ABI_CONFIGURE_TARGET="i686-linux-android"
         # Enable C++ exceptions, RTTI and GNU libstdc++ at the same time
         # You can't really build these separately at the moment.
         ABI_CFLAGS_FOR_TARGET="-fPIC"
@@ -898,14 +934,14 @@ parse_toolchain_name ()
         GDBSERVER_LDFLAGS=
         ;;
     x86-*)
-        GDBSERVER_HOST=i686-android-linux-gnu
+        GDBSERVER_HOST=i686-linux-android
         GDBSERVER_CFLAGS=
         GDBSERVER_LDFLAGS=
         ;;
     mips*)
-        GDBSERVER_HOST=mipsel-linux-gnu
+        GDBSERVER_HOST=mipsel-linux-android
         GDBSERVER_CFLAGS=
-        GDBSERVER_LDFLAGS="-Wl,-T,$ANDROID_NDK_ROOT/toolchains/mipsel-linux-android-4.4.3/mipself.x"
+        GDBSERVER_LDFLAGS=
         ;;
     esac
 
@@ -969,19 +1005,75 @@ convert_abi_to_arch ()
     echo "$RET"
 }
 
-# Return the default binary path prefix for a given architecture
-# For example: arm -> toolchains/arm-linux-androideabi-4.4.3/prebuilt/<system>/bin/arm-linux-androideabi-
+# Take architecture name as input, and output the list of corresponding ABIs
+# Inverse for convert_abi_to_arch
+# $1: ARCH name
+# Out: ABI names list (comma-separated)
+convert_arch_to_abi ()
+{
+    local RET
+    case $1 in
+        arm)
+            RET=armeabi,armeabi-v7a
+            ;;
+        x86)
+            RET=x86
+            ;;
+        mips)
+            RET=mips
+            ;;
+        *)
+            >&2 echo "ERROR: Unsupported ARCH name: $1, use one of: arm, x86, mips"
+            exit 1
+            ;;
+    esac
+    echo "$RET"
+}
+
+# Take a list of architecture names as input, and output the list of corresponding ABIs
+# $1: ARCH names list (separated by spaces or commas)
+# Out: ABI names list (comma-separated)
+convert_archs_to_abis ()
+{
+    local RET
+    for ARCH in $(commas_to_spaces $@); do
+       ABI=$(convert_arch_to_abi $ARCH)
+       if [ -n "$ABI" ]; then
+          if [ -n "$RET" ]; then
+             RET=$RET",$ABI"
+          else
+             RET=$ABI
+          fi
+       else   # Error message is printed by convert_arch_to_abi
+          exit 1
+       fi
+    done
+    echo "$RET"
+}
+
+# Return the default toolchain binary path prefix for given architecture and gcc version
+# For example: arm 4.6 -> toolchains/arm-linux-androideabi-4.6/prebuilt/<system>/bin/arm-linux-androideabi-
 # $1: Architecture name
-# $2: optional, system name, defaults to $HOST_TAG
-get_default_toolchain_binprefix_for_arch ()
+# $2: GCC version
+# $3: optional, system name, defaults to $HOST_TAG
+get_toolchain_binprefix_for_arch ()
 {
     local NAME PREFIX DIR BINPREFIX
-    local SYSTEM=${2:-$(get_prebuilt_host_tag)}
-    NAME=$(get_default_toolchain_name_for_arch $1)
+    local SYSTEM=${3:-$(get_prebuilt_host_tag)}
+    NAME=$(get_toolchain_name_for_arch $1 $2)
     PREFIX=$(get_default_toolchain_prefix_for_arch $1)
     DIR=$(get_toolchain_install . $NAME $SYSTEM)
     BINPREFIX=${DIR#./}/bin/$PREFIX-
     echo "$BINPREFIX"
+}
+
+# Return the default toochain binary path prefix for a given architecture
+# For example: arm -> toolchains/arm-linux-androideabi-4.6/prebuilt/<system>/bin/arm-linux-androideabi-
+# $1: Architecture name
+# $2: optional, system name, defaults to $HOST_TAG
+get_default_toolchain_binprefix_for_arch ()
+{
+    get_toolchain_binprefix_for_arch $1 $DEFAULT_GCC_VERSION $2
 }
 
 # Return default API level for a given arch

@@ -199,13 +199,19 @@ case "$GDB_VERSION" in
         # static executable.
         CONFIGURE_FLAGS="--with-libthread-db=$BUILD_SYSROOT/usr/lib/libthread_db.a"
         ;;
+    7.3.x)
+        CONFIGURE_FLAGS="--with-libthread-db=$BUILD_SYSROOT/usr/lib/libthread_db.a"
+        # Disable libinproctrace.so which needs crtbegin_so.o and crtbend_so.o instead of
+        # CRTBEGIN/END above.  Clean it up and re-enable it in the future.
+        CONFIGURE_FLAGS=$CONFIGURE_FLAGS" --disable-inprocess-agent"
+        ;;
     *)
         CONFIGURE_FLAGS=""
 esac
 
 cd $BUILD_OUT &&
 export CC="$TOOLCHAIN_PREFIX-gcc --sysroot=$BUILD_SYSROOT" &&
-export CFLAGS="-O2 -nostdinc -nostdlib -D__ANDROID__ -DANDROID -DSTDC_HEADERS $INCLUDE_DIRS $GDBSERVER_CFLAGS"  &&
+export CFLAGS="-O2 -nostdlib -D__ANDROID__ -DANDROID -DSTDC_HEADERS $INCLUDE_DIRS $GDBSERVER_CFLAGS"  &&
 export LDFLAGS="-static -Wl,-z,nocopyreloc -Wl,--no-undefined $LIBRARY_LDFLAGS $GDBSERVER_LDFLAGS" &&
 run $SRC_DIR/configure \
 --host=$GDBSERVER_HOST \
@@ -238,7 +244,7 @@ else
     DSTFILE="gdbserver"
 fi
 dump "Install  : $TOOLCHAIN $DSTFILE."
-DEST=`dirname $TOOLCHAIN_PATH`
+DEST=$ANDROID_NDK_ROOT/prebuilt/android-$ARCH/gdbserver
 mkdir -p $DEST &&
 run $TOOLCHAIN_PREFIX-objcopy --strip-unneeded $BUILD_OUT/gdbserver $DEST/$DSTFILE
 if [ $? != 0 ] ; then
@@ -247,10 +253,9 @@ if [ $? != 0 ] ; then
 fi
 
 if [ "$PACKAGE_DIR" ]; then
-    ARCHIVE=$TOOLCHAIN-gdbserver.tar.bz2
-    SUBDIR=$(dirname $(get_toolchain_install_subdir $TOOLCHAIN $HOST_TAG))
+    ARCHIVE=$ARCH-gdbserver.tar.bz2
     dump "Packaging: $ARCHIVE"
-    pack_archive "$PACKAGE_DIR/$ARCHIVE" "$NDK_DIR" "$SUBDIR/$DSTFILE"
+    pack_archive "$PACKAGE_DIR/$ARCHIVE" "$ANDROID_NDK_ROOT" "prebuilt/android-$ARCH/gdbserver/$DSTFILE"
 fi
 
 log "Cleaning up."

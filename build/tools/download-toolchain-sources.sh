@@ -26,7 +26,7 @@ PROGDIR=`cd $PROGDIR && pwd`
 
 # the default branch to use
 BRANCH=master
-register_option "--branch=<name>" BRANCH "Specify release branch"
+register_var_option "--branch=<name>" BRANCH "Specify release branch"
 
 # the default release name (use today's date)
 if [ "$TOOLCHAIN_GIT_DATE" -a "$TOOLCHAIN_GIT_DATE" != "now" ] ; then
@@ -53,6 +53,12 @@ register_var_option "--package" OPTION_PACKAGE "Create source package in /tmp/nd
 
 OPTION_NO_PATCHES=no
 register_var_option "--no-patches" OPTION_NO_PATCHES "Do not patch sources"
+
+LLVM_VERSION_LIST=$DEFAULT_LLVM_VERSION_LIST
+register_var_option "--llvm-ver-list=<vers>" LLVM_VERSION_LIST "List of LLVM release versions"
+
+LLVM_URL=$DEFAULT_LLVM_URL
+register_var_option "--llvm-url=<url>" LLVM_URL "URL to download LLVM tar archive"
 
 PROGRAM_PARAMETERS="<src-dir>"
 PROGRAM_DESCRIPTION=\
@@ -101,6 +107,10 @@ if [ -n "$SRC_DIR" ] ; then
     log "Using target source directory: $SRC_DIR"
 fi
 
+# Normalize the parameters
+LLVM_VERSION_LIST=$(commas_to_spaces $LLVM_VERSION_LIST)
+LLVM_URL=${LLVM_URL%"/"}
+
 # Create temp directory where everything will be copied first
 #
 PKGNAME=android-ndk-toolchain-$RELEASE
@@ -123,54 +133,145 @@ if [ -n "$OPTION_GIT_REFERENCE" ] ; then
     dump "Using git clone reference: $GITREFERENCE"
 fi
 
+# Clone a given toolchain git repository
+# $1: repository name, relative to $GITPREFIX (e.g. 'gcc')
+#
 toolchain_clone ()
 {
     local GITFLAGS
-    GITFLAGS=
+    GITFLAGS="--no-checkout"
     if [ "$GITREFERENCE" ]; then
-        GITFLAGS="$GITFLAGS --shared --reference $GITREFERENCE/$1"
+        GITFLAGS=$GITFLAGS" --shared --reference $GITREFERENCE/$1"
     fi
-    dump "downloading sources for toolchain/$1"
+    dump "Cloning git repository for toolchain/$1"
     if [ -d "$GITPREFIX/$1" ]; then
-        log "cloning $GITPREFIX/$1"
-        run git clone $GITFLAGS $GITPREFIX/$1 $1
+        run ln -s "$GITPREFIX/$1" $CLONE_DIR/$1.git
     else
         log "cloning $GITPREFIX/$1.git"
-        run git clone $GITFLAGS $GITPREFIX/$1.git $1
+        (cd $CLONE_DIR && run git clone $GITFLAGS $GITPREFIX/$1.git)
     fi
     fail_panic "Could not clone $GITPREFIX/$1.git ?"
-    log "checking out $BRANCH branch of $1.git"
-    cd $1
-    if [ "$BRANCH" != "master" ] ; then
-        run git checkout -b $BRANCH origin/$BRANCH
-        fail_panic "Could not checkout $1 ?"
-    fi
-    # If --git-date is used, or we have a default
+}
+
+# Checkout sources from a git clone created with toolchain_clone
+# $1: repository/clone name (e.g. 'gcc')
+# $2: sub-path to extract, relative to clone top-level (e.g. 'gcc-4.4.3')
+#
+toolchain_checkout ()
+{
+    local NAME=$1
+    shift
+    local GITOPTS="--git-dir=$CLONE_DIR/$NAME/.git"
+    log "Checking out $BRANCH branch of $NAME.git: $@"
+    local REVISION=origin/$BRANCH
     if [ -n "$GIT_DATE" ] ; then
-        REVISION=`git rev-list -n 1 --until="$GIT_DATE" HEAD`
-        dump "Using sources for date '$GIT_DATE': toolchain/$1 revision $REVISION"
-        run git checkout $REVISION
-        fail_panic "Could not checkout $1 ?"
+        REVISION=`git $GITOPTS rev-list -n 1 --until="$GIT_DATE" $REVISION`
     fi
-    (printf "%-32s " "toolchain/$1.git"; git log -1 --format=oneline) >> $SOURCES_LIST
-    # get rid of .git directory, we won't need it.
-    cd ..
-    log "getting rid of .git directory for $1."
-    run rm -rf $1/.git
+    (mkdir -p $TMPDIR/$NAME && cd $TMPDIR/$NAME && run git $GITOPTS checkout $REVISION "$@")
+    fail_panic "Could not checkout $NAME / $@ ?"
+    (printf "%-32s " "toolchain/$NAME.git"; git $GITOPTS log -1 --format=oneline $REVISION) >> $SOURCES_LIST
+}
+
+# Download and extract LLVM/Clang source from $LLVM_URL
+# $1: LLVM/Clang release version
+#
+llvm_checkout () {
+    local VER=$1
+
+    # Determine the tar archive name and directory name by release version
+    if [ $VER = "2.6" ]; then
+        local LLVM_NAME=llvm-$VER
+        local LLVM_TAR=llvm-$VER.tar.gz
+        local CLANG_NAME=clang-$VER
+        local CLANG_TAR=clang-$VER.tar.gz
+    elif [ $VER = "2.7" -o $VER = "2.8" -o $VER = "2.9" ]; then
+        local LLVM_NAME=llvm-$VER
+        local LLVM_TAR=llvm-$VER.tgz
+        local CLANG_NAME=clang-$VER
+        local CLANG_TAR=clang-$VER.tgz
+    elif [ $VER = "3.0" ]; then
+        local LLVM_NAME=llvm-$VER.src
+        local LLVM_TAR=llvm-$VER.tar.gz
+        local CLANG_NAME=clang-$VER.src
+        local CLANG_TAR=clang-$VER.tar.gz
+    else
+        # Use the latest scheme by default (LLVM 3.1)
+        local LLVM_NAME=llvm-$VER.src
+        local LLVM_TAR=llvm-$VER.src.tar.gz
+        local CLANG_NAME=clang-$VER.src
+        local CLANG_TAR=clang-$VER.src.tar.gz
+    fi
+
+    local URL_PREFIX=$LLVM_URL/$VER
+    local OUT_DIR=llvm-$VER
+
+    # Create "llvm" subdirectory under $SRC_DIR
+    LLVM_DIR=$TMPDIR/llvm
+    mkdir -p $LLVM_DIR
+    fail_panic "Could not create $LLVM_DIR as directory"
+
+    # Cleanup existing tar archives or output directory
+    (cd $LLVM_DIR && rm -rf $LLVM_TAR $CLANG_TAR $OUT_DIR || true)
+
+    # Download the source code and extract them
+    dump "Downloading $URL_PREFIX/$LLVM_TAR"
+    (cd $LLVM_DIR && run curl -S -O $URL_PREFIX/$LLVM_TAR && tar xzf $LLVM_TAR)
+    fail_panic "Could not download and extract llvm source code"
+
+    dump "Downloading $URL_PREFIX/$CLANG_TAR"
+    (cd $LLVM_DIR && \
+        run curl -S -O $URL_PREFIX/$CLANG_TAR && tar xzf $CLANG_TAR)
+    fail_panic "Could not download and extract clang source code"
+
+    # Rename the extracted directory
+    if [ $LLVM_NAME != $OUT_DIR ]; then
+        (cd $LLVM_DIR && mv $LLVM_NAME $OUT_DIR)
+        fail_panic "Could not rename $LLVM_NAME to $OUT_DIR"
+    fi
+
+    (cd $LLVM_DIR && mv $CLANG_NAME $OUT_DIR/tools/clang)
+    fail_panic "Could not rename $CLANG_NAME to $OUT_DIR/tools/clang"
+
+    # Cleanup the tar archive
+    (cd $LLVM_DIR && rm $LLVM_TAR $CLANG_TAR || true)
 }
 
 cd $TMPDIR
 
+CLONE_DIR=$TMPDIR/git
+mkdir -p $CLONE_DIR
+
 SOURCES_LIST=$(pwd)/SOURCES
 rm -f $SOURCES_LIST && touch $SOURCES_LIST
 
-toolchain_clone binutils
 toolchain_clone build
+
+toolchain_clone gmp
+toolchain_clone mpfr
+toolchain_clone mpc
+toolchain_clone binutils
 toolchain_clone gcc
 toolchain_clone gdb
-toolchain_clone gmp
-toolchain_clone gold  # not sure about this one !
-toolchain_clone mpfr
+toolchain_clone expat
+
+
+toolchain_checkout build .
+toolchain_checkout gmp  .
+toolchain_checkout mpfr .
+toolchain_checkout mpc  .
+toolchain_checkout expat .
+toolchain_checkout binutils binutils-2.19 binutils-2.21
+toolchain_checkout gcc gcc-4.4.3 gcc-4.6
+toolchain_checkout gdb gdb-6.6 gdb-7.1.x gdb-7.3.x
+
+for LLVM_VERSION in $LLVM_VERSION_LIST; do
+    llvm_checkout $LLVM_VERSION
+done
+
+PYVERSION=2.7.3
+PYVERSION_FOLDER=$(echo ${PYVERSION} | sed 's/\([0-9\.]*\).*/\1/')
+dump "Downloading http://www.python.org/ftp/python/${PYVERSION_FOLDER}/Python-${PYVERSION}.tar.bz2"
+(mkdir -p $TMPDIR/python && cd $TMPDIR/python && run curl -S -O http://www.python.org/ftp/python/${PYVERSION_FOLDER}/Python-${PYVERSION}.tar.bz2 && tar -xjf Python-${PYVERSION}.tar.bz2)
 
 # Patch the toolchain sources
 if [ "$OPTION_NO_PATCHES" != "yes" ]; then
@@ -183,37 +284,6 @@ if [ "$OPTION_NO_PATCHES" != "yes" ]; then
             exit 1
         fi
     fi
-fi
-
-
-# We only keep one version of gcc and binutils
-
-# we clearly don't need this
-log "getting rid of obsolete sources: gcc-4.2.1 gcc-4.3.1 gcc-4.4.0 gdb-6.8 binutils-2.17"
-rm -rf $TMPDIR/gcc/gcc-4.2.1
-rm -rf $TMPDIR/gcc/gcc-4.3.1
-rm -rf $TMPDIR/gcc/gcc-4.4.0
-rm -rf $TMPDIR/gcc/gdb-6.8
-rm -rf $TMPDIR/binutils/binutils-2.17
-
-# Check out binutils 2.21 from master
-if [ ! -d "$TMPDIR/binutils/binutils-2.21" ] ; then
-    dump "Get binutils 2.21 from https://android.googlesource.com/toolchain/binutils.git"
-    rm -rf new
-    mkdir new
-    cd new
-    run git clone https://android.googlesource.com/toolchain/binutils.git binutils
-    cd binutils
-    # Find out the version at 2012/3/29
-    MYDATE=2012-03-29
-    MYREVISION=`git rev-list -n 1 --until="$MYDATE" HEAD`
-    dump "Using sources for date '$MYDATE': revision $MYREVISION"
-    run git checkout $MYREVISION
-    fail_panic "Could not checkout $MYREVISION ?"
-    cd ..
-    mv binutils/binutils-2.21 $TMPDIR/binutils
-    cd ..
-    rm -rf new
 fi
 
 # remove all info files from the toolchain sources
